@@ -8,6 +8,7 @@ import (
 
 	"github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
+	badgerds "github.com/ipfs/go-ds-badger"
 	"github.com/ipfs/go-metrics-interface"
 )
 
@@ -21,8 +22,8 @@ var (
 
 // New wraps the datastore, providing metrics on the operations. The
 // metrics are registered with names starting with prefix and a dot.
-func New(prefix string, ds datastore.Datastore) *measure {
-	m := &measure{
+func New(prefix string, ds datastore.Datastore) *Measure {
+	m := &Measure{
 		backend: ds,
 
 		putNum: metrics.New(prefix+".put_total", "Total number of Datastore.Put calls").Counter(),
@@ -103,7 +104,7 @@ func New(prefix string, ds datastore.Datastore) *measure {
 	return m
 }
 
-type measure struct {
+type Measure struct {
 	backend datastore.Datastore
 
 	putNum     metrics.Counter
@@ -171,7 +172,7 @@ func recordLatency(h metrics.Histogram, start time.Time) {
 	h.Observe(elapsed.Seconds())
 }
 
-func (m *measure) Put(key datastore.Key, value []byte) error {
+func (m *Measure) Put(key datastore.Key, value []byte) error {
 	defer recordLatency(m.putLatency, time.Now())
 	m.putNum.Inc()
 	m.putSize.Observe(float64(len(value)))
@@ -182,7 +183,7 @@ func (m *measure) Put(key datastore.Key, value []byte) error {
 	return err
 }
 
-func (m *measure) Sync(prefix datastore.Key) error {
+func (m *Measure) Sync(prefix datastore.Key) error {
 	defer recordLatency(m.syncLatency, time.Now())
 	m.syncNum.Inc()
 	err := m.backend.Sync(prefix)
@@ -192,7 +193,7 @@ func (m *measure) Sync(prefix datastore.Key) error {
 	return err
 }
 
-func (m *measure) Get(key datastore.Key) (value []byte, err error) {
+func (m *Measure) Get(key datastore.Key) (value []byte, err error) {
 	defer recordLatency(m.getLatency, time.Now())
 	m.getNum.Inc()
 	value, err = m.backend.Get(key)
@@ -207,7 +208,22 @@ func (m *measure) Get(key datastore.Key) (value []byte, err error) {
 	return value, err
 }
 
-func (m *measure) Has(key datastore.Key) (exists bool, err error) {
+func (m *Measure) GetRaw(key datastore.Key) (value []byte, err error) {
+	defer recordLatency(m.getLatency, time.Now())
+	m.getNum.Inc()
+	value, err = m.backend.(*badgerds.Datastore).GetRaw(key)
+	switch err {
+	case nil:
+		m.getSize.Observe(float64(len(value)))
+	case datastore.ErrNotFound:
+		// Not really an error.
+	default:
+		m.getErr.Inc()
+	}
+	return value, err
+}
+
+func (m *Measure) Has(key datastore.Key) (exists bool, err error) {
 	defer recordLatency(m.hasLatency, time.Now())
 	m.hasNum.Inc()
 	exists, err = m.backend.Has(key)
@@ -217,7 +233,7 @@ func (m *measure) Has(key datastore.Key) (exists bool, err error) {
 	return exists, err
 }
 
-func (m *measure) GetSize(key datastore.Key) (size int, err error) {
+func (m *Measure) GetSize(key datastore.Key) (size int, err error) {
 	defer recordLatency(m.getsizeLatency, time.Now())
 	m.getsizeNum.Inc()
 	size, err = m.backend.GetSize(key)
@@ -230,7 +246,7 @@ func (m *measure) GetSize(key datastore.Key) (size int, err error) {
 	return size, err
 }
 
-func (m *measure) Delete(key datastore.Key) error {
+func (m *Measure) Delete(key datastore.Key) error {
 	defer recordLatency(m.deleteLatency, time.Now())
 	m.deleteNum.Inc()
 	err := m.backend.Delete(key)
@@ -240,7 +256,7 @@ func (m *measure) Delete(key datastore.Key) error {
 	return err
 }
 
-func (m *measure) Query(q query.Query) (query.Results, error) {
+func (m *Measure) Query(q query.Query) (query.Results, error) {
 	defer recordLatency(m.queryLatency, time.Now())
 	m.queryNum.Inc()
 	res, err := m.backend.Query(q)
@@ -250,7 +266,7 @@ func (m *measure) Query(q query.Query) (query.Results, error) {
 	return res, err
 }
 
-func (m *measure) Check() error {
+func (m *Measure) Check() error {
 	defer recordLatency(m.checkLatency, time.Now())
 	m.checkNum.Inc()
 	if c, ok := m.backend.(datastore.CheckedDatastore); ok {
@@ -263,7 +279,7 @@ func (m *measure) Check() error {
 	return nil
 }
 
-func (m *measure) Scrub() error {
+func (m *Measure) Scrub() error {
 	defer recordLatency(m.scrubLatency, time.Now())
 	m.scrubNum.Inc()
 	if c, ok := m.backend.(datastore.ScrubbedDatastore); ok {
@@ -276,7 +292,7 @@ func (m *measure) Scrub() error {
 	return nil
 }
 
-func (m *measure) CollectGarbage() error {
+func (m *Measure) CollectGarbage() error {
 	defer recordLatency(m.gcLatency, time.Now())
 	m.gcNum.Inc()
 	if c, ok := m.backend.(datastore.GCDatastore); ok {
@@ -289,7 +305,7 @@ func (m *measure) CollectGarbage() error {
 	return nil
 }
 
-func (m *measure) DiskUsage() (uint64, error) {
+func (m *Measure) DiskUsage() (uint64, error) {
 	defer recordLatency(m.duLatency, time.Now())
 	m.duNum.Inc()
 	size, err := datastore.DiskUsage(m.backend)
@@ -301,10 +317,10 @@ func (m *measure) DiskUsage() (uint64, error) {
 
 type measuredBatch struct {
 	b datastore.Batch
-	m *measure
+	m *Measure
 }
 
-func (m *measure) Batch() (datastore.Batch, error) {
+func (m *Measure) Batch() (datastore.Batch, error) {
 	bds, ok := m.backend.(datastore.Batching)
 	if !ok {
 		return nil, datastore.ErrBatchUnsupported
@@ -351,7 +367,7 @@ func (mt *measuredBatch) Commit() error {
 	return err
 }
 
-func (m *measure) Close() error {
+func (m *Measure) Close() error {
 	if c, ok := m.backend.(io.Closer); ok {
 		return c.Close()
 	}
