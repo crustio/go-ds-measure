@@ -211,7 +211,13 @@ func (m *Measure) Get(key datastore.Key) (value []byte, err error) {
 func (m *Measure) GetRaw(key datastore.Key) (value []byte, err error) {
 	defer recordLatency(m.getLatency, time.Now())
 	m.getNum.Inc()
-	value, err = m.backend.(*badgerds.Datastore).GetRaw(key)
+	switch m.backend.(type) {
+	case *badgerds.Datastore:
+		value, err = m.backend.(*badgerds.Datastore).GetRaw(key)
+	default:
+		value, err = m.backend.Get(key)
+	}
+
 	switch err {
 	case nil:
 		m.getSize.Observe(float64(len(value)))
