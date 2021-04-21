@@ -6,9 +6,9 @@ import (
 	"io"
 	"time"
 
+	badgerds "github.com/crustio/go-ds-badger"
 	"github.com/ipfs/go-datastore"
 	"github.com/ipfs/go-datastore/query"
-	badgerds "github.com/ipfs/go-ds-badger"
 	"github.com/ipfs/go-metrics-interface"
 )
 
